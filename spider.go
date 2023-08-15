@@ -4,54 +4,25 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
-	"github.com/gocolly/colly/v2"
+	"github.com/PuerkitoBio/goquery"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
-	"sort"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 // cyclone's url spider
+// spider will crawl a url and create a wordlist, or use flag -ngram to create ngrams
 // version 0.5.10; initial github release
-
-// global variables... I know...
-var (
-	urlFlag     string
-	crawlFlag   int
-	oFlag       string
-	phraseFlag  int
-	cycloneFlag bool
-	versionFlag bool
-	wordList    = make(map[string]int)
-	wordListMu  sync.Mutex
-)
-
-// initilize flags
-func init() {
-	flag.StringVar(&urlFlag, "url", "", "URL to scrape")
-	flag.IntVar(&crawlFlag, "crawl", 1, "Depth to crawl links")
-	flag.StringVar(&oFlag, "o", "", "Output file for word list")
-	flag.IntVar(&phraseFlag, "phrase", 1, "Process pairs of words")
-	flag.BoolVar(&cycloneFlag, "cyclone", false, "")
-	flag.BoolVar(&versionFlag, "version", false, "Version number")
-	flag.Parse()
-
-	// check for "http*" on urlFlag so gocolly doesn't wet the bed
-	u, err := url.Parse(urlFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing URL: %v\n", err)
-		os.Exit(1)
-	}
-	if u.Scheme == "" {
-		u.Scheme = "https"
-		urlFlag = u.String()
-	}
-}
+/* version 0.6.2;
+   fixed scraping logic & ngram creations bugs
+   switched from gocolly to goquery for web scraping
+   remove dups from word / ngrams output
+*/
 
 // clear screen function
 func clearScreen() {
@@ -71,114 +42,173 @@ func clearScreen() {
 	}
 }
 
-// word processing logic
-func processWords(text string, phrase int) {
-	// acquire lock before accessing wordList
-	wordListMu.Lock()
-	defer wordListMu.Unlock()
-
-	wordRegex := regexp.MustCompile(`\w+`)
-	words := wordRegex.FindAllString(text, -1)
-
-	for i := 0; i < len(words); i++ {
-		if i+phrase <= len(words) {
-			phraseWords := make([]string, phrase)
-			for j := 0; j < phrase; j++ {
-				phraseWords[j] = words[i+j]
-			}
-			phraseStr := strings.Join(phraseWords, " ")
-			if _, ok := wordList[phraseStr]; ok {
-				wordList[phraseStr]++
-			} else {
-				wordList[phraseStr] = 1
-			}
-		} else {
-			word := words[i]
-			if _, ok := wordList[word]; ok {
-				wordList[word]++
-			} else {
-				wordList[word] = 1
-			}
-		}
+// goquery
+func getDocumentFromURL(targetURL string) (*goquery.Document, error) {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		return nil, err
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	return goquery.NewDocumentFromReader(res.Body)
 }
 
-// save wordlist logic
-func saveWordList(filename string) {
-	// acquire lock before accessing wordList
-	wordListMu.Lock()
-	defer wordListMu.Unlock()
-	file, err := os.Create(filename)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
-		os.Exit(1)
-	}
-	defer file.Close()
-
-	type wordCount struct {
-		Word  string
-		Count int
-	}
-
-	var counts []wordCount
-	for word, count := range wordList {
-		counts = append(counts, wordCount{Word: word, Count: count})
-	}
-
-	sort.Slice(counts, func(i, j int) bool {
-		return counts[i].Count > counts[j].Count
+func getLinksFromDocument(doc *goquery.Document) []string {
+	var links []string
+	doc.Find("a[href]").Each(func(index int, item *goquery.Selection) {
+		linkTag := item
+		link, _ := linkTag.Attr("href")
+		links = append(links, link)
 	})
+	return links
+}
 
-	for _, wc := range counts {
-		_, err := fmt.Fprintln(file, wc.Word)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing to output file: %v\n", err)
-			os.Exit(1)
+func getTextFromDocument(doc *goquery.Document) string {
+	doc.Find("script, style").Each(func(index int, item *goquery.Selection) {
+		item.Remove()
+	})
+	return doc.Text()
+}
+
+func crawlAndScrape(u string, depth int, phrase int) map[string]bool {
+	ngrams := make(map[string]bool)
+	doc, err := getDocumentFromURL(u)
+	if err != nil {
+		fmt.Println("Error fetching URL:", err)
+		return ngrams
+	}
+	text := getTextFromDocument(doc)
+	for _, ngram := range generateNgrams(text, phrase) {
+		ngrams[ngram] = true
+	}
+
+	if depth > 1 {
+		links := getLinksFromDocument(doc)
+		for _, link := range links[:depth-1] {
+			absoluteLink := joinURL(u, link)
+			childNgrams := crawlAndScrape(absoluteLink, depth-1, phrase)
+			for ngram := range childNgrams {
+				ngrams[ngram] = true
+			}
 		}
 	}
+
+	return ngrams
+}
+
+func joinURL(baseURL, relativeURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	newURL, err := u.Parse(relativeURL)
+	if err != nil {
+		return ""
+	}
+	return newURL.String()
+}
+
+func generateNgrams(text string, n int) []string {
+	words := strings.Fields(text)
+	var ngrams []string
+	for i := 0; i < len(words)-n+1; i++ {
+		ngrams = append(ngrams, strings.Join(words[i:i+n], " "))
+	}
+	return ngrams
+}
+
+func uniqueStrings(str string) map[string]bool {
+	words := strings.Fields(str)
+	uniqueWords := make(map[string]bool)
+	for _, word := range words {
+		uniqueWords[word] = true
+	}
+	return uniqueWords
+}
+
+func uniqueStringsSlice(strs []string) map[string]bool {
+	uniqueStrings := make(map[string]bool)
+	for _, str := range strs {
+		uniqueStrings[str] = true
+	}
+	return uniqueStrings
 }
 
 // main function
 func main() {
 	clearScreen()
 
-	if cycloneFlag {
+	cycloneFlag := flag.Bool("cyclone", false, "Display coded message")
+	versionFlag := flag.Bool("version", false, "Display version")
+	urlFlag := flag.String("url", "", "URL of the website to scrape")
+	ngramFlag := flag.String("ngram", "1", "Lengths of n-grams (e.g., \"1-3\" for 1, 2, and 3-length n-grams). Default: 1")
+	oFlag := flag.String("o", "", "Output file for the n-grams")
+	crawlFlag := flag.Int("crawl", 1, "Number of links to crawl (default: 1)")
+	flag.Parse()
+
+	if *cycloneFlag {
 		codedBy := "Q29kZWQgYnkgY3ljbG9uZSA7KQo="
 		codedByDecoded, _ := base64.StdEncoding.DecodeString(codedBy)
 		fmt.Fprintln(os.Stderr, string(codedByDecoded))
 		os.Exit(0)
 	}
 
-	if versionFlag {
-		version := "Q3ljbG9uZSdzIFVSTCBTcGlkZXIgdjAuNS4xMAo="
+	if *versionFlag {
+		version := "Q3ljbG9uZSdzIFVSTCBTcGlkZXIgdjAuNi4yCg=="
 		versionDecoded, _ := base64.StdEncoding.DecodeString(version)
 		fmt.Fprintln(os.Stderr, string(versionDecoded))
 		os.Exit(0)
 	}
 
-	if urlFlag == "" {
+	if *urlFlag == "" {
 		fmt.Fprintln(os.Stderr, "Error: -url flag is required")
+		fmt.Fprintln(os.Stderr, "Try running --help for more information")
 		os.Exit(1)
 	}
 
-	if crawlFlag < 1 || crawlFlag > 100 {
-		fmt.Fprintln(os.Stderr, "Error: -crawl flag must be between 1 and 100")
+	if *crawlFlag < 1 || *crawlFlag > 5 {
+		fmt.Fprintln(os.Stderr, "Error: -crawl flag must be between 1 and 5")
 		os.Exit(1)
 	}
 
-	if phraseFlag < 1 || phraseFlag > 100 {
-		fmt.Fprintln(os.Stderr, "Error: -phrase flag must be between 1 and 100")
+	// check for "http*" on urlFlag so goquery doesn't wet the bed
+	u, err := url.Parse(*urlFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing URL: %v\n", err)
 		os.Exit(1)
 	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+		*urlFlag = u.String()
+	}
 
-	if oFlag == "" {
-		parsedUrl, err := url.Parse(urlFlag)
+	ngramRange := strings.Split(*ngramFlag, "-")
+	ngramMin, err := strconv.Atoi(ngramRange[0])
+	if err != nil || ngramMin < 1 || ngramMin > 20 {
+		fmt.Fprintln(os.Stderr, "Error: -ngram flag must be between 1 and 20")
+		os.Exit(1)
+	}
+	ngramMax := ngramMin
+	if len(ngramRange) > 1 {
+		ngramMax, err = strconv.Atoi(ngramRange[1])
+		if err != nil || ngramMax < ngramMin || ngramMax > 20 {
+			fmt.Fprintln(os.Stderr, "Error: -ngram flag must be between 1 and 20")
+			os.Exit(1)
+		}
+	}
+
+	if *oFlag == "" {
+		parsedUrl, err := url.Parse(*urlFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error parsing URL")
 			os.Exit(1)
 		}
-		// default wordlist output if -oFlag is not specified
-		oFlag = strings.TrimPrefix(parsedUrl.Hostname(), "www.") + "_wordlist.txt"
+		*oFlag = strings.TrimPrefix(parsedUrl.Hostname(), "www.") + "_wordlist.txt"
 	}
 
 	start := time.Now()
@@ -187,50 +217,48 @@ func main() {
 	fmt.Fprintln(os.Stderr, "| Cyclone's URL Spider |")
 	fmt.Fprintln(os.Stderr, " ---------------------- ")
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "Crawling URL:\t%s\n", urlFlag)
+	fmt.Fprintf(os.Stderr, "Crawling URL:\t%s\n", *urlFlag)
+	fmt.Fprintf(os.Stderr, "Crawl depth:\t%d\n", *crawlFlag)
+	fmt.Fprintf(os.Stderr, "ngram len:\t%s\n", *ngramFlag)
 
-	c := colly.NewCollector(
-		colly.MaxDepth(crawlFlag),
-		colly.Async(true),
-	)
-
-	// initialize depth to crawlFlag
-	depth := crawlFlag
-
-	// print crawl & depth info
-	fmt.Fprintf(os.Stderr, "Crawl Depth:\t%d\n", depth)
-	fmt.Fprintf(os.Stderr, "Phrase Depth:\t%d\n", phraseFlag)
-
-	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		link := e.Request.AbsoluteURL(e.Attr("href"))
-		if link != "" && depth > 0 { // check if depth is greater than 0
-			depth-- // decrement depth after visiting a link
-			e.Request.Visit(link)
-			time.Sleep(250 * time.Millisecond) // add short sleep time between requests to keep from being rate limited
+	ngrams := make(map[string]bool)
+	for i := ngramMin; i <= ngramMax; i++ {
+		for ngram := range crawlAndScrape(*urlFlag, *crawlFlag, i) {
+			ngrams[ngram] = true
 		}
-	})
-
-	// only collect text from these elements using colly.HTML
-	c.OnHTML("p, h1, h2, h3, h4, h5, h6, li", func(e *colly.HTMLElement) {
-		processWords(e.Text, phraseFlag)
-	})
-
-	c.OnScraped(func(r *colly.Response) {
-		saveWordList(oFlag)
-	})
-
-	err := c.Visit(urlFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error crawling URL: %v\n", err)
-		os.Exit(1)
 	}
 
-	c.Wait()
+	// extract n-grams into a slice
+	var ngramSlice []string
+	for ngram := range ngrams {
+		ngramSlice = append(ngramSlice, ngram)
+	}
 
-	// print runtime results
-	fmt.Fprintf(os.Stderr, "Unique words:\t%d\n", len(wordList))
-	fmt.Fprintf(os.Stderr, "Wordlist:\t%s\n", oFlag)
-	fmt.Fprintf(os.Stderr, "Runtime:\t%s\n", time.Since(start))
+	// write unique n-grams to file
+	file, err := os.Create(*oFlag)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return
+	}
+	defer file.Close()
+
+	for _, ngram := range ngramSlice {
+		file.WriteString(ngram + "\n")
+	}
+
+	// calculate unique words
+	uniqueWords := len(uniqueStrings(strings.Join(ngramSlice, " ")))
+
+	// calculate unique n-grams
+	uniqueNgrams := len(ngramSlice)
+
+	runtime := time.Since(start)
+
+	// print statistics
+	fmt.Fprintf(os.Stderr, "Unique words:\t%d\n", uniqueWords)
+	fmt.Fprintf(os.Stderr, "Unique ngrams:\t%d\n", uniqueNgrams)
+	fmt.Fprintf(os.Stderr, "Saved to:\t%s\n", *oFlag)
+	fmt.Fprintf(os.Stderr, "Runtime:\t%.6fs\n", runtime.Seconds())
 }
 
 // end code
