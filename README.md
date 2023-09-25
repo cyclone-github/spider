@@ -13,5 +13,5 @@ Wordlist & ngram creation tool to crawl a given url and create a wordlist / ngra
 - To set a custom output file, use flag "-o filename"
   - ./spider.bin -url https://github.com/cyclone-github -o wordlist.txt
 
-###Compile from source code info:
+### Compile from source code info:
 - https://github.com/cyclone-github/scripts/blob/main/intro_to_go.txt
