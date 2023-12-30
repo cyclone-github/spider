@@ -1,6 +1,6 @@
 # Cyclone's URL Spider
 
-![image](https://i.imgur.com/5APspH4.png)
+![image](https://i.imgur.com/TtlVRNB.png)
 
 Wordlist & ngram creation tool to crawl a given url and create a wordlist / ngrams (depending on flags given).
 ### Usage Instructions:
@@ -12,6 +12,8 @@ Wordlist & ngram creation tool to crawl a given url and create a wordlist / ngra
   - ./spider.bin -url https://github.com/cyclone-github -crawl 2
 - To set a custom output file, use flag "-o filename"
   - ./spider.bin -url https://github.com/cyclone-github -o wordlist.txt
+- To set a delay to keep from being rate-limited, use flag "-delay nth" where nth is time in milliseconds
+  - ./spider.bin -url https://github.com/cyclone-github -delay 100
 
 ### Compile from source code info:
 - https://github.com/cyclone-github/scripts/blob/main/intro_to_go.txt
