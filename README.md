@@ -1,6 +1,6 @@
 # Cyclone's URL Spider
 
-![image](https://i.imgur.com/qc6XviF.png)
+![image](https://i.imgur.com/Z6RjlUv.png)
 
 Wordlist & ngram creation tool to crawl a given url and create a wordlist / ngrams (depending on flags given).
 ### Usage Instructions:

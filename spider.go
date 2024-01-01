@@ -36,23 +36,31 @@ version 0.7.0;
    fixed bug when attempting to crawl deeper than available URLs to crawl
    fixed crawl depth calculation
    optimized code which runs 2.8x faster vs v0.6.x during bench testing
+version 0.7.1;
+	added progress bars to word / ngrams processing & file writing operations
+	added RAM usage monitoring
+	optimized order of operations for faster processing with less RAM
+	TO-DO: refactor code (func main is getting messy)
 */
 
 // clear screen function
 func clearScreen() {
+	var cmd *exec.Cmd
+
 	switch runtime.GOOS {
-	case "linux":
-		cmd := exec.Command("clear")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
-	case "darwin":
-		cmd := exec.Command("clear")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
+	case "linux", "darwin":
+		cmd = exec.Command("clear")
 	case "windows":
-		cmd := exec.Command("cmd", "/c", "cls")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
+		cmd = exec.Command("cmd", "/c", "cls")
+	default:
+		fmt.Fprintln(os.Stderr, "Unsupported platform")
+		os.Exit(1)
+	}
+
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to clear screen: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -145,7 +153,7 @@ func crawlAndScrape(u string, depth int, delay int, urlCountChan chan<- int, tex
 			absoluteLink := joinURL(u, link)
 			linkDomain, err := getBaseDomain(absoluteLink)
 			if err != nil {
-				fmt.Println("Error getting link domain:", err)
+				fmt.Fprintf(os.Stderr, "Error getting link domain for %s: %v\n", absoluteLink, err)
 				continue
 			}
 			if linkDomain == baseDomain {
@@ -176,25 +184,38 @@ func joinURL(baseURL, relativeURL string) string {
 	return newURL.String()
 }
 
-func generateNgrams(text string, n int) []string {
-	words := strings.Fields(text)
-	if len(words) < n {
-		return nil // return nil if not enough words for the n-gram
+func updateProgressBar(action string, total, processed int) {
+	if total == 0 {
+		return // avoid division by zero
 	}
-	var ngrams []string
-	for i := 0; i <= len(words)-n; i++ {
-		ngrams = append(ngrams, strings.Join(words[i:i+n], " "))
+	percentage := float64(processed) / float64(total) * 100
+	fmt.Printf("\r%s...\t[", action)
+	for i := 0; i < int(percentage/5); i++ {
+		fmt.Print("=")
 	}
-	return ngrams
+	for i := int(percentage / 5); i < 20; i++ {
+		fmt.Print(" ")
+	}
+	fmt.Printf("] %.2f%%", percentage)
 }
 
-func uniqueStrings(str string) map[string]bool {
-	words := strings.Fields(str)
-	uniqueWords := make(map[string]bool)
-	for _, word := range words {
-		uniqueWords[word] = true
+func monitorRAMUsage(stopChan chan bool, maxRAMUsage *float64) {
+	var memStats runtime.MemStats
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			runtime.ReadMemStats(&memStats)
+			currentUsage := float64(memStats.Alloc) / 1024 / 1024 / 1024 // GB
+			if currentUsage > *maxRAMUsage {
+				*maxRAMUsage = currentUsage
+			}
+		case <-stopChan:
+			return
+		}
 	}
-	return uniqueWords
 }
 
 // main function
@@ -218,7 +239,7 @@ func main() {
 	}
 
 	if *versionFlag {
-		version := "Q3ljbG9uZSdzIFVSTCBTcGlkZXIgdjAuNy4wCg=="
+		version := "Q3ljbG9uZSdzIFVSTCBTcGlkZXIgdjAuNy4xLWJldGEK"
 		versionDecoded, _ := base64.StdEncoding.DecodeString(version)
 		fmt.Fprintln(os.Stderr, string(versionDecoded))
 		os.Exit(0)
@@ -226,7 +247,7 @@ func main() {
 
 	if *urlFlag == "" {
 		fmt.Fprintln(os.Stderr, "Error: -url flag is required")
-		fmt.Fprintln(os.Stderr, "Try running --help for more information")
+		fmt.Fprintln(os.Stderr, "Try running -help for more information")
 		os.Exit(1)
 	}
 
@@ -287,7 +308,7 @@ func main() {
 	fmt.Fprintln(os.Stderr, " ---------------------- ")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "Crawling URL:\t%s\n", *urlFlag)
-	fmt.Fprintf(os.Stderr, "Base Domain:\t%s\n", baseDomain)
+	fmt.Fprintf(os.Stderr, "Base domain:\t%s\n", baseDomain)
 	fmt.Fprintf(os.Stderr, "Crawl depth:\t%d\n", *crawlFlag)
 	fmt.Fprintf(os.Stderr, "ngram len:\t%s\n", *ngramFlag)
 	fmt.Fprintf(os.Stderr, "Crawl delay:\t%dms (increase this to avoid rate limiting, ex: -delay 100)\n", *delayFlag)
@@ -298,6 +319,11 @@ func main() {
 	visitedURLs := make(map[string]bool)
 	doneChan := make(chan struct{})
 	var wg sync.WaitGroup
+	stopMonitor := make(chan bool)
+	var maxRAMUsage float64
+
+	// start RAM usage monitor
+	go monitorRAMUsage(stopMonitor, &maxRAMUsage)
 
 	// goroutine to print URLs crawled
 	wg.Add(1)
@@ -308,48 +334,80 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprintf(os.Stderr, "\rURLs Crawled:\t%d", totalCrawled)
+				fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled)
 			case count := <-urlCountChan:
 				totalCrawled += count
 			case <-doneChan:
-				fmt.Fprintf(os.Stderr, "\rURLs Crawled:\t%d", totalCrawled) // final update
+				fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled) // final update
 				return
 			}
 		}
 	}()
 
 	// start crawling process in goroutine
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, urlCountChan, textsChan, visitedURLs)
-		close(textsChan) // close channel after crawling is complete
-	}()
-
-	// wait for crawling to complete
-	go func() {
-		wg.Wait()
+		time.Sleep(100 * time.Millisecond)
+		close(textsChan)
 		close(doneChan)
+		fmt.Println()
 	}()
 
-	// process the collected texts and generate n-grams
-	ngrams := make(map[string]bool)
+	// initialize maps for unique word and n-gram counting
+	uniqueWordsMap := make(map[string]bool)
+	uniqueNgramsMap := make(map[string]bool)
 
-	if len(ngramRange) > 1 {
-		ngramMax, _ = strconv.Atoi(ngramRange[1])
-	}
-
+	// collect all texts into a slice
+	var texts []string
 	for text := range textsChan {
-		for i := ngramMin; i <= ngramMax; i++ {
-			for _, ngram := range generateNgrams(text, i) {
-				ngrams[ngram] = true
+		texts = append(texts, text)
+	}
+	totalTexts := len(texts)
+
+	// set up progress bar ticker
+	progressTicker := time.NewTicker(100 * time.Millisecond) // update progress every 100ms
+	defer progressTicker.Stop()
+	processedTexts := 0
+
+	// process texts and generate n-grams
+	for _, text := range texts {
+		words := strings.Fields(text)
+		for _, word := range words {
+			uniqueWordsMap[word] = true // count unique words
+		}
+
+		for i := 0; i <= len(words)-ngramMin; i++ {
+			for n := ngramMin; n <= ngramMax && i+n <= len(words); n++ {
+				ngram := strings.Join(words[i:i+n], " ")
+				uniqueNgramsMap[ngram] = true // count unique n-grams
 			}
+		}
+
+		processedTexts++
+		select {
+		case <-progressTicker.C:
+			updateProgressBar("Processing", totalTexts, processedTexts)
+		default:
+			// continue without blocking if ticker channel is not ready
 		}
 	}
 
-	// extract n-grams into a slice
+	// final update to progress bar output
+	updateProgressBar("Processing", totalTexts, processedTexts)
+
+	// convert unique n-grams map back to a slice for writing to file
 	var ngramSlice []string
-	for ngram := range ngrams {
+	for ngram := range uniqueNgramsMap {
 		ngramSlice = append(ngramSlice, ngram)
 	}
+
+	// calculated counts
+	uniqueWords := len(uniqueWordsMap)
+	uniqueNgrams := len(uniqueNgramsMap)
+	fmt.Fprintf(os.Stderr, "\nUnique words:\t%d\n", uniqueWords)
+	fmt.Fprintf(os.Stderr, "Unique ngrams:\t%d\n", uniqueNgrams)
 
 	// write unique n-grams to file
 	file, err := os.Create(*oFlag)
@@ -360,29 +418,43 @@ func main() {
 	defer file.Close()
 
 	writer := bufio.NewWriterSize(file, 1*1024*1024) // 1MB buffer for better write performance
-	for _, ngram := range ngramSlice {
+	totalNgrams := len(ngramSlice)
+
+	// progress update interval
+	progressUpdateInterval := totalNgrams / 100
+	if progressUpdateInterval == 0 {
+		progressUpdateInterval = 1
+	}
+
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	for i, ngram := range ngramSlice {
 		_, err := writer.WriteString(ngram + "\n")
 		if err != nil {
 			fmt.Println("Error writing to buffer:", err)
 			return
 		}
+		if i%progressUpdateInterval == 0 {
+			updateProgressBar("Writing", totalNgrams, i+1) // update write progress bar
+		}
 	}
+
 	err = writer.Flush()
 	if err != nil {
 		fmt.Println("Error flushing buffer to file:", err)
 		return
 	}
+	updateProgressBar("Writing", totalNgrams, totalNgrams) // final update to write progress bar
 
-	// calculate unique words and n-grams
-	uniqueWords := len(uniqueStrings(strings.Join(ngramSlice, " ")))
-	uniqueNgrams := len(ngramSlice)
+	// stop RAM monitoring
+	stopMonitor <- true
 
 	// print statistics
-	runtime := time.Since(start)
-	fmt.Fprintf(os.Stderr, "\nUnique words:\t%d\n", uniqueWords)
-	fmt.Fprintf(os.Stderr, "Unique ngrams:\t%d\n", uniqueNgrams)
-	fmt.Fprintf(os.Stderr, "Saved to:\t%s\n", *oFlag)
-	fmt.Fprintf(os.Stderr, "Runtime:\t%.3fs\n", runtime.Seconds())
+	fmt.Fprintf(os.Stderr, "\nOutput file:\t%s\n", *oFlag)
+	fmt.Fprintf(os.Stderr, "RAM used:\t%.2f GB\n", maxRAMUsage)
+	runTime := time.Since(start)
+	fmt.Fprintf(os.Stderr, "Runtime:\t%.3fs\n", runTime.Seconds())
 }
 
 // end code
