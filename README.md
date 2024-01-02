@@ -18,7 +18,8 @@ Wordlist & ngram creation tool to crawl a given url and create wordlists and/or 
 - If you want the latest features, compiling from source is the best option since the release version may run several revisions behind the source code.
 - Compile from source code info:
   - https://github.com/cyclone-github/scripts/blob/main/intro_to_go.txt
-
+### Change Log:
+- https://github.com/cyclone-github/spider/blob/main/CHANGELOG.md
 ### Mentions:
 - Go Package Documentation: https://pkg.go.dev/github.com/cyclone-github/spider
 - Softpedia: https://www.softpedia.com/get/Internet/Other-Internet-Related/Cyclone-s-URL-Spider.shtml
