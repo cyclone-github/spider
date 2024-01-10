@@ -16,7 +16,13 @@ Wordlist & ngram creation tool to crawl a given url and create wordlists and/or 
 
 ### Compile from source:
 - If you want the latest features, compiling from source is the best option since the release version may run several revisions behind the source code.
-- Compile from source code info:
+- This assumes you have Go and Git installed
+  - `git clone https://github.com/cyclone-github/spider.git`
+  - `cd spider`
+  - `go mod init spider`
+  - `go mod tidy`
+  - `go build -ldflags="-s -w" .`
+- Compile from source code how-to:
   - https://github.com/cyclone-github/scripts/blob/main/intro_to_go.txt
 ### Change Log:
 - https://github.com/cyclone-github/spider/blob/main/CHANGELOG.md
