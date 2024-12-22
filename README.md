@@ -1,7 +1,25 @@
 [![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=cyclone-github&repo=spider&theme=gruvbox)](https://github.com/cyclone-github/)
 # Cyclone's URL Spider
+<!-- ![image](https://i.imgur.com/Z6RjlUv.png) -->
+```
+ ---------------------- 
+| Cyclone's URL Spider |
+ ---------------------- 
 
-![image](https://i.imgur.com/Z6RjlUv.png)
+Crawling URL:   https://forum.hashpwn.net
+Base domain:    forum.hashpwn.net
+Crawl depth:    2
+ngram len:      1-3
+Crawl delay:    0ms (increase this to avoid rate limiting, ex: -delay 100)
+URLs crawled:   51
+Processing...   [====================] 100.00%
+Unique words:   1983
+Unique ngrams:  11030
+Writing...      [====================] 100.00%
+Output file:    forum.hashpwn.net_wordlist.txt
+RAM used:       0.03 GB
+Runtime:        4.949s
+```
 
 Wordlist & ngram creation tool to crawl a given url and create wordlists and/or ngrams (depending on flags given).
 ### Usage Instructions:
