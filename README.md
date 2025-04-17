@@ -7,8 +7,9 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/cyclone-github/spider.svg)](https://pkg.go.dev/github.com/cyclone-github/spider)
 
 # Cyclone's URL Spider
-<!-- ![image](https://i.imgur.com/Z6RjlUv.png) -->
 ```
+spider -url 'https://forum.hashpwn.net' -crawl 3 -delay 50 -sort -ngram 1-3 -o forum.hashpwn.net_wordlist.txt
+
  ---------------------- 
 | Cyclone's URL Spider |
  ---------------------- 
@@ -17,28 +18,32 @@ Crawling URL:   https://forum.hashpwn.net
 Base domain:    forum.hashpwn.net
 Crawl depth:    2
 ngram len:      1-3
-Crawl delay:    0ms (increase this to avoid rate limiting, ex: -delay 100)
-URLs crawled:   51
+Crawl delay:    20ms (increase this to avoid rate limiting)
+Timeout:        1 sec
+URLs crawled:   56
 Processing...   [====================] 100.00%
-Unique words:   1983
-Unique ngrams:  11030
+Unique words:   3164
+Unique ngrams:  17313
+Sorting n-grams by frequency...
 Writing...      [====================] 100.00%
 Output file:    forum.hashpwn.net_wordlist.txt
 RAM used:       0.03 GB
-Runtime:        4.949s
+Runtime:        8.634s
 ```
 
 Wordlist & ngram creation tool to crawl a given url and create wordlists and/or ngrams (depending on flags given).
 ### Usage Instructions:
 - To create a simple wordlist from a specified url (will save deduplicated wordlist to url_wordlist.txt):
-  - `./spider.bin -url https://github.com/cyclone-github`
+  - `spider -url 'https://github.com/cyclone-github'`
 - To set url crawl url depth of 2 and create ngrams len 1-5, use flag "-crawl 2" and "-ngram 1-5"
-  - `./spider.bin -url https://github.com/cyclone-github -crawl 2 -ngram 1-5`
+  - `spider -url 'https://github.com/cyclone-github' -crawl 2 -ngram 1-5`
 - To set a custom output file, use flag "-o filename"
-  - `./spider.bin -url https://github.com/cyclone-github -o wordlist.txt`
+  - `spider -url 'https://github.com/cyclone-github' -o wordlist.txt`
 - To set a delay to keep from being rate-limited, use flag "-delay nth" where nth is time in milliseconds
-  - `./spider.bin -url https://github.com/cyclone-github -delay 100`
-- Run `./spider.bin -help` to see a list of all options
+  - `spider -url 'https://github.com/cyclone-github' -delay 100`
+- To sort output by frequency, use flag "-sort"
+  - `spider -url 'https://github.com/cyclone-github' -sort`
+- Run `spider -help` to see a list of all options
 
 ### Compile from source:
 - If you want the latest features, compiling from source is the best option since the release version may run several revisions behind the source code.
