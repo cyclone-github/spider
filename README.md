@@ -8,7 +8,7 @@
 
 # Spider: URL Mode
 ```
-spider -url 'https://forum.hashpwn.net' -crawl 3 -delay 20 -sort -ngram 1-3 -o forum.hashpwn.net_spider.txt
+spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -o forum.hashpwn.net_spider.txt
 ```
 ```
  ---------------------- 
@@ -62,6 +62,8 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
   - `spider -url 'https://github.com/cyclone-github' -o wordlist.txt`
 - To set a delay to keep from being rate-limited, use flag "-delay nth" where nth is time in milliseconds
   - `spider -url 'https://github.com/cyclone-github' -delay 100`
+- To set a URL timeout, use flag "-timeout nth" where nth is time in seconds
+  - `spider -url 'https://github.com/cyclone-github' -timeout 2`
 - To create ngrams len 1-3 and sort output by frequency, use "-ngram 1-3" "-sort"
   - `spider -url 'https://github.com/cyclone-github' -ngram 1-3 -sort`
 - To process a local text file, create ngrams len 1-3 and sort output by frequency
