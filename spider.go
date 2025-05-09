@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -23,12 +23,13 @@ import (
 /*
    cyclone's url spider
    spider will crawl a url and create a wordlist, or use flag -ngram to create ngrams
-version 0.5.10; initial github release
-version 0.6.2;
+v0.5.10;
+	initial github release
+v0.6.2;
    fixed scraping logic & ngram creations bugs
    switched from gocolly to goquery for web scraping
    remove dups from word / ngrams output
-version 0.7.0;
+v0.7.0;
    added feature to allow crawling specific file extensions (html, htm, txt)
    added check to keep crawler from crawling offsite URLs
    added flag "-delay" to avoid rate limiting (-delay 100 == 100ms delay between URL requests)
@@ -38,20 +39,31 @@ version 0.7.0;
    fixed bug when attempting to crawl deeper than available URLs to crawl
    fixed crawl depth calculation
    optimized code which runs 2.8x faster vs v0.6.x during bench testing
-version 0.7.1;
+v0.7.1;
     added progress bars to word / ngrams processing & file writing operations
     added RAM usage monitoring
     optimized order of operations for faster processing with less RAM
     TO-DO: refactor code (func main is getting messy)
-    TO-DO: add -file flag to allow crawling local plaintext files such as an ebook.txt
+    TO-DO: add -file flag to allow crawling local plaintext files such as an ebook.txt (COMPLETED in v0.8.0)
 v0.8.0;
     added flag "-file" to allow creating ngrams from a local plaintext file (ex: foobar.txt)
     added flag "-timeout" for -url mode
     added flag "-sort" which sorts output by frequency
     fixed several small bugs
+v0.8.1;
+	updated default -delay to 10ms
+v0.9.0:
+    added flag "-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6
+    exit early if zero URLs were crawled (no processing or file output)
+    use custom User-Agent "Spider/0.9.0 (+https://github.com/cyclone-github/spider)"
+    removed clearScreen function and its imports
+    fixed crawl-depth calculation logic
+    fixed restrict link collection to .html, .htm, .txt and extension-less paths
+    upgraded dependencies and bumped Go version to v1.24.3
 */
 
 // clear screen function
+/*
 func clearScreen() {
 	var cmd *exec.Cmd
 
@@ -71,6 +83,7 @@ func clearScreen() {
 		os.Exit(1)
 	}
 }
+*/
 
 // goquery
 func getDocumentFromURL(targetURL string, timeout time.Duration) (*goquery.Document, bool, error) {
@@ -79,7 +92,7 @@ func getDocumentFromURL(targetURL string, timeout time.Duration) (*goquery.Docum
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
+	req.Header.Set("User-Agent", "Spider/0.9.0 (+https://github.com/cyclone-github/spider)")
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -106,16 +119,23 @@ func hasAnySuffix(s string, suffixes []string) bool {
 
 func getLinksFromDocument(doc *goquery.Document, baseURL string) []string {
 	var links []string
-	validSuffixes := []string{".html", ".htm", ".txt"} // specifically crawl file types, ex: if listed in a file server
+	validSuffixes := map[string]bool{
+		".html": true,
+		".htm":  true,
+		".txt":  true,
+	}
 
-	doc.Find("a[href]").Each(func(index int, item *goquery.Selection) {
-		link, exists := item.Attr("href")
-		if exists {
-			absoluteLink := joinURL(baseURL, link) // convert to absolute URL
-			// crawl any non-anchor or valid-file-type link
-			if hasAnySuffix(link, validSuffixes) || !strings.HasPrefix(link, "#") {
-				links = append(links, absoluteLink)
-			}
+	doc.Find("a[href]").Each(func(_ int, item *goquery.Selection) {
+		href, exists := item.Attr("href")
+		if !exists || strings.HasPrefix(href, "#") {
+			return
+		}
+		absoluteLink := joinURL(baseURL, href)
+
+		// only allow approved extensions or none at all
+		ext := strings.ToLower(path.Ext(absoluteLink))
+		if ext == "" || validSuffixes[ext] {
+			links = append(links, absoluteLink)
 		}
 	})
 	return links
@@ -128,7 +148,7 @@ func getTextFromDocument(doc *goquery.Document) string {
 	return doc.Text()
 }
 
-func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool) {
+func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, matchStr string) {
 	if visited[u] {
 		return
 	}
@@ -142,10 +162,12 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCo
 	if !isSuccess {
 		return
 	}
-	urlCountChan <- 1 // URL processed
 
-	text := getTextFromDocument(doc)
-	textsChan <- text // send the text for later n-gram processing
+	// only count & scrape text if it contains -match
+	if matchStr == "" || strings.Contains(strings.ToLower(u), matchStr) {
+		urlCountChan <- 1                     // URL processed
+		textsChan <- getTextFromDocument(doc) // send the text for later n-gram processing
+	}
 
 	if depth > 1 {
 		baseDomain, err := getBaseDomain(u)
@@ -153,17 +175,24 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCo
 			fmt.Fprintf(os.Stderr, "Error getting base domain: %v\n", err)
 			return
 		}
-		links := getLinksFromDocument(doc, u)
-		for _, link := range links {
+		for _, link := range getLinksFromDocument(doc, u) {
 			time.Sleep(time.Duration(delay) * time.Millisecond)
+
 			linkDomain, err := getBaseDomain(link)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error parsing link %s: %v\n", link, err)
 				continue
 			}
-			if linkDomain == baseDomain {
-				crawlAndScrape(link, depth-1, delay, timeout, urlCountChan, textsChan, visited)
+			if linkDomain != baseDomain {
+				continue
 			}
+
+			// only *descend* into children that match (if matchStr was provided)
+			if matchStr != "" && !strings.Contains(strings.ToLower(link), matchStr) {
+				continue
+			}
+
+			crawlAndScrape(link, depth-1, delay, timeout, urlCountChan, textsChan, visited, matchStr)
 		}
 	}
 }
@@ -225,7 +254,7 @@ func monitorRAMUsage(stopChan chan bool, maxRAMUsage *float64) {
 
 // main function
 func main() {
-	clearScreen()
+	//clearScreen()
 
 	cycloneFlag := flag.Bool("cyclone", false, "Display coded message")
 	versionFlag := flag.Bool("version", false, "Display version")
@@ -234,9 +263,10 @@ func main() {
 	ngramFlag := flag.String("ngram", "1", "Lengths of n-grams (e.g., \"1-3\" for 1, 2, and 3-length n-grams).")
 	oFlag := flag.String("o", "", "Output file for the n-grams")
 	crawlFlag := flag.Int("crawl", 1, "Depth of links to crawl")
-	delayFlag := flag.Int("delay", 0, "Delay in ms between each URL lookup to avoid rate limiting")
+	delayFlag := flag.Int("delay", 10, "Delay in ms between each URL lookup to avoid rate limiting")
 	timeoutFlag := flag.Int("timeout", 1, "Timeout for URL crawling in seconds")
 	sortFlag := flag.Bool("sort", false, "Sort output by frequency")
+	matchFlag := flag.String("match", "", "Only crawl URLs containing this keyword (case-insensitive)")
 	flag.Parse()
 
 	if *cycloneFlag {
@@ -246,7 +276,7 @@ func main() {
 		os.Exit(0)
 	}
 	if *versionFlag {
-		version := "Cyclone's URL Spider v0.8.0"
+		version := "Cyclone's URL Spider v0.9.0"
 		fmt.Fprintln(os.Stderr, version)
 		os.Exit(0)
 	}
@@ -258,6 +288,8 @@ func main() {
 		os.Exit(1)
 	}
 	fileMode := *fileFlag != ""
+
+	matchStr := strings.ToLower(*matchFlag)
 
 	var baseDomain string
 	if !fileMode {
@@ -370,7 +402,7 @@ func main() {
 			defer wg.Done()
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
-			totalCrawled := 1
+			totalCrawled := 0
 			for {
 				select {
 				case <-ticker.C:
@@ -378,7 +410,9 @@ func main() {
 				case count := <-urlCountChan:
 					totalCrawled += count
 				case <-doneChan:
-					fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled)
+					if totalCrawled > 0 {
+						fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled)
+					}
 					return
 				}
 			}
@@ -388,7 +422,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, urlCountChan, textsChan, visitedURLs)
+			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, urlCountChan, textsChan, visitedURLs, matchStr)
 			time.Sleep(100 * time.Millisecond)
 			close(textsChan)
 			close(doneChan)
@@ -401,6 +435,13 @@ func main() {
 	for text := range textsChan {
 		texts = append(texts, text)
 	}
+
+	// if nothing matched, exit early
+	if len(texts) == 0 {
+		fmt.Fprintln(os.Stderr, "No URLs crawled, exiting...") // boo, something went wrong!
+		return
+	}
+
 	totalTexts := len(texts)
 
 	// set up progress bar ticker

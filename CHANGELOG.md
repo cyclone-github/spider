@@ -1,3 +1,17 @@
+### v0.9.0
+```
+added flag "-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6
+exit early if zero URLs were crawled (no processing or file output)
+use custom User-Agent "Spider/0.9.0 (+https://github.com/cyclone-github/spider)"
+removed clearScreen function and its imports
+fixed crawl-depth calculation logic
+fixed restrict link collection to .html, .htm, .txt and extension-less paths
+upgraded dependencies and bumped Go version to v1.24.3
+```
+### v0.8.1
+```
+updated default -delay to 10ms
+```
 ### v0.8.0
 ```
 added flag "-file" to allow creating ngrams from a local plaintext file (ex: foobar.txt)

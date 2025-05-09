@@ -8,7 +8,7 @@
 
 # Spider: URL Mode
 ```
-spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -o forum.hashpwn.net_spider.txt
+spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -match foobar -o forum.hashpwn.net_spider.txt
 ```
 ```
  ---------------------- 
@@ -66,6 +66,8 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
   - `spider -url 'https://github.com/cyclone-github' -timeout 2`
 - To create ngrams len 1-3 and sort output by frequency, use "-ngram 1-3" "-sort"
   - `spider -url 'https://github.com/cyclone-github' -ngram 1-3 -sort`
+- To filter crawled URLs by keyword "foobar"
+  - `spider -url 'https://github.com/cyclone-github' -match foobar`
 - To process a local text file, create ngrams len 1-3 and sort output by frequency
   - `spider -file foobar.txt -ngram 1-3 -sort`
 - Run `spider -help` to see a list of all options
