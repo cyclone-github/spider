@@ -8,7 +8,7 @@
 
 # Spider: URL Mode
 ```
-spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -match foobar -o forum.hashpwn.net_spider.txt
+spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -match wordlist -o forum.hashpwn.net_spider.txt
 ```
 ```
  ---------------------- 
@@ -21,15 +21,15 @@ Crawl depth:    2
 ngram len:      1-3
 Crawl delay:    20ms (increase this to avoid rate limiting)
 Timeout:        1 sec
-URLs crawled:   56
+URLs crawled:   2
 Processing...   [====================] 100.00%
-Unique words:   3164
-Unique ngrams:  17313
+Unique words:   475
+Unique ngrams:  1977
 Sorting n-grams by frequency...
 Writing...      [====================] 100.00%
 Output file:    forum.hashpwn.net_spider.txt
-RAM used:       0.03 GB
-Runtime:        8.634s
+RAM used:       0.02 GB
+Runtime:        2.283s
 ```
 # Spider: File Mode
 ```
@@ -72,6 +72,31 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
   - `spider -file foobar.txt -ngram 1-3 -sort`
 - Run `spider -help` to see a list of all options
 
+### spider -help
+```
+  -crawl int
+        Depth of links to crawl (default 1)
+  -cyclone
+        Display coded message
+  -delay int
+        Delay in ms between each URL lookup to avoid rate limiting (default 10)
+  -file string
+        Path to a local file to scrape
+  -match string
+        Only crawl URLs containing this keyword (case-insensitive)
+  -ngram string
+        Lengths of n-grams (e.g., "1-3" for 1, 2, and 3-length n-grams). (default "1")
+  -o string
+        Output file for the n-grams
+  -sort
+        Sort output by frequency
+  -timeout int
+        Timeout for URL crawling in seconds (default 1)
+  -url string
+        URL of the website to scrape
+  -version
+        Display version
+```
 ### Compile from source:
 - If you want the latest features, compiling from source is the best option since the release version may run several revisions behind the source code.
 - This assumes you have Go and Git installed
