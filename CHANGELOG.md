@@ -1,6 +1,7 @@
 ### v0.9.0
 ```
 added flag "-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6
+added notice to user if no URLs are crawled when using "-crawl 1 -match"
 exit early if zero URLs were crawled (no processing or file output)
 use custom User-Agent "Spider/0.9.0 (+https://github.com/cyclone-github/spider)"
 removed clearScreen function and its imports
