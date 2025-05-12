@@ -52,15 +52,15 @@ v0.8.0;
     fixed several small bugs
 v0.8.1;
 	updated default -delay to 10ms
-v0.9.0:
-    added flag "-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6
-	added notice to user if no URLs are crawled when using "-crawl 1 -match"
-    exit early if zero URLs were crawled (no processing or file output)
-    use custom User-Agent "Spider/0.9.0 (+https://github.com/cyclone-github/spider)"
-    removed clearScreen function and its imports
-    fixed crawl-depth calculation logic
-    fixed restrict link collection to .html, .htm, .txt and extension-less paths
-    upgraded dependencies and bumped Go version to v1.24.3
+v0.9.0;
+	added flag "-url-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6
+	added notice to user if no URLs are crawled when using "-crawl 1 -url-match"
+	exit early if zero URLs were crawled (no processing or file output)
+	use custom User-Agent "Spider/0.9.0 (+https://github.com/cyclone-github/spider)"
+	removed clearScreen function and its imports
+	fixed crawl-depth calculation logic
+	fixed restrict link collection to .html, .htm, .txt and extension-less paths
+	upgraded dependencies and bumped Go version to v1.24.3
 */
 
 // clear screen function
@@ -149,7 +149,7 @@ func getTextFromDocument(doc *goquery.Document) string {
 	return doc.Text()
 }
 
-func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, matchStr string) {
+func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, urlMatchStr string) {
 	if visited[u] {
 		return
 	}
@@ -164,8 +164,8 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCo
 		return
 	}
 
-	// only count & scrape text if it contains -match
-	if matchStr == "" || strings.Contains(strings.ToLower(u), matchStr) {
+	// only count & scrape text if it contains -url-match
+	if urlMatchStr == "" || strings.Contains(strings.ToLower(u), urlMatchStr) {
 		urlCountChan <- 1                     // URL processed
 		textsChan <- getTextFromDocument(doc) // send the text for later n-gram processing
 	}
@@ -188,12 +188,12 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCo
 				continue
 			}
 
-			// only *descend* into children that match (if matchStr was provided)
-			if matchStr != "" && !strings.Contains(strings.ToLower(link), matchStr) {
+			// only *descend* into children that match (if urlMatchStr was provided)
+			if urlMatchStr != "" && !strings.Contains(strings.ToLower(link), urlMatchStr) {
 				continue
 			}
 
-			crawlAndScrape(link, depth-1, delay, timeout, urlCountChan, textsChan, visited, matchStr)
+			crawlAndScrape(link, depth-1, delay, timeout, urlCountChan, textsChan, visited, urlMatchStr)
 		}
 	}
 }
@@ -267,7 +267,7 @@ func main() {
 	delayFlag := flag.Int("delay", 10, "Delay in ms between each URL lookup to avoid rate limiting")
 	timeoutFlag := flag.Int("timeout", 1, "Timeout for URL crawling in seconds")
 	sortFlag := flag.Bool("sort", false, "Sort output by frequency")
-	matchFlag := flag.String("match", "", "Only crawl URLs containing this keyword (case-insensitive)")
+	urlMatchFlag := flag.String("url-match", "", "Only crawl URLs containing this keyword (case-insensitive)")
 	flag.Parse()
 
 	if *cycloneFlag {
@@ -290,7 +290,7 @@ func main() {
 	}
 	fileMode := *fileFlag != ""
 
-	matchStr := strings.ToLower(*matchFlag)
+	urlMatchStr := strings.ToLower(*urlMatchFlag)
 
 	var baseDomain string
 	if !fileMode {
@@ -423,7 +423,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, urlCountChan, textsChan, visitedURLs, matchStr)
+			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, urlCountChan, textsChan, visitedURLs, urlMatchStr)
 			time.Sleep(100 * time.Millisecond)
 			close(textsChan)
 			close(doneChan)
@@ -442,7 +442,7 @@ func main() {
 		time.Sleep(100)
 		fmt.Fprintln(os.Stderr, "No URLs crawled, exiting...") // boo, something went wrong!
 		if *crawlFlag == 1 {
-			fmt.Fprintln(os.Stderr, "Try increasing -crawl depth")
+			fmt.Fprintln(os.Stderr, "Try increasing -crawl depth, or remove -url-match")
 		}
 		return
 	}
