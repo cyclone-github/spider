@@ -61,6 +61,10 @@ v0.9.0;
 	fixed crawl-depth calculation logic
 	fixed restrict link collection to .html, .htm, .txt and extension-less paths
 	upgraded dependencies and bumped Go version to v1.24.3
+
+TODO:
+	-plaintext (allow user to "copy / paste" webpage)
+	-text-match (only process webpages whose text contains specified keyword — similar to -url-match, but matches webpage text instead)
 */
 
 // clear screen function
