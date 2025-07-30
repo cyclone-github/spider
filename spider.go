@@ -61,43 +61,22 @@ v0.9.0;
 	fixed crawl-depth calculation logic
 	fixed restrict link collection to .html, .htm, .txt and extension-less paths
 	upgraded dependencies and bumped Go version to v1.24.3
+v0.9.1;
+	added flag "-agent" to allow user to specify custom user-agent; https://github.com/cyclone-github/spider/issues/8
 
 TODO:
 	-plaintext (allow user to "copy / paste" webpage)
 	-text-match (only process webpages whose text contains specified keyword — similar to -url-match, but matches webpage text instead)
 */
 
-// clear screen function
-/*
-func clearScreen() {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		cmd = exec.Command("clear")
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "cls")
-	default:
-		fmt.Fprintln(os.Stderr, "Unsupported platform")
-		os.Exit(1)
-	}
-
-	cmd.Stdout = os.Stdout
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to clear screen: %v\n", err)
-		os.Exit(1)
-	}
-}
-*/
-
 // goquery
-func getDocumentFromURL(targetURL string, timeout time.Duration) (*goquery.Document, bool, error) {
+func getDocumentFromURL(targetURL string, timeout time.Duration, agent string) (*goquery.Document, bool, error) {
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("User-Agent", "Spider/0.9.0 (+https://github.com/cyclone-github/spider)")
+	req.Header.Set("User-Agent", agent)
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -153,13 +132,13 @@ func getTextFromDocument(doc *goquery.Document) string {
 	return doc.Text()
 }
 
-func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, urlMatchStr string) {
+func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, agent string, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, urlMatchStr string) {
 	if visited[u] {
 		return
 	}
 	visited[u] = true // mark before fetch to avoid retry on error
 
-	doc, isSuccess, err := getDocumentFromURL(u, timeout)
+	doc, isSuccess, err := getDocumentFromURL(u, timeout, agent)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error fetching URL %s: %v\n", u, err)
 		return
@@ -197,7 +176,7 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, urlCo
 				continue
 			}
 
-			crawlAndScrape(link, depth-1, delay, timeout, urlCountChan, textsChan, visited, urlMatchStr)
+			crawlAndScrape(link, depth-1, delay, timeout, agent, urlCountChan, textsChan, visited, urlMatchStr)
 		}
 	}
 }
@@ -272,6 +251,8 @@ func main() {
 	timeoutFlag := flag.Int("timeout", 1, "Timeout for URL crawling in seconds")
 	sortFlag := flag.Bool("sort", false, "Sort output by frequency")
 	urlMatchFlag := flag.String("url-match", "", "Only crawl URLs containing this keyword (case-insensitive)")
+	agentFlag := flag.String("agent", "Spider/0.9.1 (+https://github.com/cyclone-github/spider)", "Custom user-agent")
+
 	flag.Parse()
 
 	if *cycloneFlag {
@@ -281,7 +262,7 @@ func main() {
 		os.Exit(0)
 	}
 	if *versionFlag {
-		version := "Cyclone's URL Spider v0.9.0"
+		version := "Cyclone's URL Spider v0.9.1"
 		fmt.Fprintln(os.Stderr, version)
 		os.Exit(0)
 	}
@@ -427,7 +408,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, urlCountChan, textsChan, visitedURLs, urlMatchStr)
+			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, *agentFlag, urlCountChan, textsChan, visitedURLs, urlMatchStr)
 			time.Sleep(100 * time.Millisecond)
 			close(textsChan)
 			close(doneChan)
@@ -443,7 +424,6 @@ func main() {
 
 	// if nothing matched, exit early
 	if len(texts) == 0 {
-		time.Sleep(100)
 		fmt.Fprintln(os.Stderr, "No URLs crawled, exiting...") // boo, something went wrong!
 		if *crawlFlag == 1 {
 			fmt.Fprintln(os.Stderr, "Try increasing -crawl depth, or remove -url-match")

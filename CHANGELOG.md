@@ -1,3 +1,7 @@
+### v0.9.1
+```
+added flag "-agent" to allow user to specify custom user-agent; https://github.com/cyclone-github/spider/issues/8
+```
 ### v0.9.0
 ```
 added flag "-url-match" to only crawl URLs containing a specified keyword; https://github.com/cyclone-github/spider/issues/6

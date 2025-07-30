@@ -8,7 +8,7 @@
 
 # Spider: URL Mode
 ```
-spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -url-match wordlist -o forum.hashpwn.net_spider.txt
+spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -url-match wordlist -o forum.hashpwn.net_spider.txt -agent 'foobar agent'
 ```
 ```
  ---------------------- 
@@ -68,12 +68,16 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
   - `spider -url 'https://github.com/cyclone-github' -ngram 1-3 -sort`
 - To filter crawled URLs by keyword "foobar"
   - `spider -url 'https://github.com/cyclone-github' -url-match foobar`
+- To specify a custom user-agent
+  - `spider -url 'https://github.com/cyclone-github' -agent 'foobar'`
 - To process a local text file, create ngrams len 1-3 and sort output by frequency
   - `spider -file foobar.txt -ngram 1-3 -sort`
 - Run `spider -help` to see a list of all options
 
 ### spider -help
 ```
+  -agent string
+        Custom user-agent (default "Spider/0.9.1 (+https://github.com/cyclone-github/spider)")
   -crawl int
         Depth of links to crawl (default 1)
   -cyclone
@@ -82,8 +86,6 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
         Delay in ms between each URL lookup to avoid rate limiting (default 10)
   -file string
         Path to a local file to scrape
-  -url-match string
-        Only crawl URLs containing this keyword (case-insensitive)
   -ngram string
         Lengths of n-grams (e.g., "1-3" for 1, 2, and 3-length n-grams). (default "1")
   -o string
@@ -94,6 +96,8 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
         Timeout for URL crawling in seconds (default 1)
   -url string
         URL of the website to scrape
+  -url-match string
+        Only crawl URLs containing this keyword (case-insensitive)
   -version
         Display version
 ```
