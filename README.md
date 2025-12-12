@@ -1,4 +1,4 @@
-[![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=cyclone-github&repo=spider&theme=gruvbox)](https://github.com/cyclone-github/spider/)
+[![Readme Card](https://github-readme-stats-fast.vercel.app/api/pin/?username=cyclone-github&repo=spider&theme=gruvbox)](https://github.com/cyclone-github/spider)
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/cyclone-github/spider)](https://goreportcard.com/report/github.com/cyclone-github/spider)
 [![GitHub issues](https://img.shields.io/github/issues/cyclone-github/spider.svg)](https://github.com/cyclone-github/spider/issues)
