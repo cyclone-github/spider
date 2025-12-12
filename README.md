@@ -6,6 +6,9 @@
 [![GitHub release](https://img.shields.io/github/release/cyclone-github/spider.svg)](https://github.com/cyclone-github/spider/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/cyclone-github/spider.svg)](https://pkg.go.dev/github.com/cyclone-github/spider)
 
+Spider is a web crawler and wordlist/ngram generator written in Go that crawls specified URLs or local files to produce frequency-sorted wordlists and ngrams. Users can customize crawl depth, output files, frequency sort, and ngram options, making it ideal for web scraping to create targeted wordlists for tools like hashcat or John the Ripper. Since Spider is written in Go, it requires no additional libraries to download or install.
+*Spider just works*.
+
 # Spider: URL Mode
 ```
 spider -url 'https://forum.hashpwn.net' -crawl 2 -delay 20 -sort -ngram 1-3 -timeout 1 -url-match wordlist -o forum.hashpwn.net_spider.txt -agent 'foobar agent'
