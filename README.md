@@ -104,6 +104,7 @@ Wordlist & ngram creation tool to crawl a given url or process a local file to c
   -version
         Display version
 ```
+
 ### Install latest release:
 ```
 go install github.com/cyclone-github/spider@latest
@@ -112,6 +113,7 @@ go install github.com/cyclone-github/spider@latest
 ```
 go install github.com/cyclone-github/spider@main
 ```
+
 ### Compile from source:
 - If you want the latest features, compiling from source is the best option since the release version may run several revisions behind the source code.
 - This assumes you have Go and Git installed
