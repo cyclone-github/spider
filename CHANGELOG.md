@@ -1,3 +1,14 @@
+### v1.0.0
+```
+added flag "-text-match" to filter page text matches
+memory and performance optimizations for -file and -url modes
+-file mode streams wordlists from disk instead of loading entire files into RAM
+reduced RAM usage for large -sort wordlists
+default -timeout increased from 1 to 10 seconds
+progress bars, stats, and errors now write to stderr
+sanitize url fragments for dedup and extension checks
+updated default User-Agent
+```
 ### v0.9.1
 ```
 added flag "-agent" to allow user to specify custom user-agent; https://github.com/cyclone-github/spider/issues/8
