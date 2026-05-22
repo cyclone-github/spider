@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,7 +22,7 @@ import (
 )
 
 /*
-   cyclone's url spider
+   cyclone's spider
    spider will crawl a url and create a wordlist, or use flag -ngram to create ngrams
 v0.5.10;
 	initial github release
@@ -43,7 +44,7 @@ v0.7.1;
     added progress bars to word / ngrams processing & file writing operations
     added RAM usage monitoring
     optimized order of operations for faster processing with less RAM
-    TO-DO: refactor code (func main is getting messy)
+	TO-DO: refactor code (func main is getting messy)
     TO-DO: add -file flag to allow crawling local plaintext files such as an ebook.txt (COMPLETED in v0.8.0)
 v0.8.0;
     added flag "-file" to allow creating ngrams from a local plaintext file (ex: foobar.txt)
@@ -63,11 +64,25 @@ v0.9.0;
 	upgraded dependencies and bumped Go version to v1.24.3
 v0.9.1;
 	added flag "-agent" to allow user to specify custom user-agent; https://github.com/cyclone-github/spider/issues/8
-
-TODO:
-	-plaintext (allow user to "copy / paste" webpage)
-	-text-match (only process webpages whose text contains specified keyword — similar to -url-match, but matches webpage text instead)
+v1.0.0;
+	added flag "-text-match" to filter page text matches
+	memory and performance optimizations for -file and -url modes
+	-file mode streams wordlists from disk instead of loading entire files into RAM
+	reduced RAM usage for large -sort wordlists
+	default -timeout increased from 1 to 10 seconds
+	progress bars, stats, and errors now write to stderr
+	sanitize url fragments for dedup and extension checks
+	updated default User-Agent
 */
+
+const spiderVersion = "1.0.0"
+
+// approved link extensions for crawling
+var validLinkSuffixes = map[string]bool{
+	".html": true,
+	".htm":  true,
+	".txt":  true,
+}
 
 // goquery
 func getDocumentFromURL(targetURL string, timeout time.Duration, agent string) (*goquery.Document, bool, error) {
@@ -92,22 +107,28 @@ func getDocumentFromURL(targetURL string, timeout time.Duration, agent string) (
 	return doc, true, err
 }
 
-func hasAnySuffix(s string, suffixes []string) bool {
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(s, suffix) {
-			return true
-		}
+// strip url fragment for dedup and fetching
+func sanitizeURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
 	}
-	return false
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+// check link path extension (.html, .htm, .txt, or none)
+func isAllowedLink(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	ext := strings.ToLower(path.Ext(parsed.Path))
+	return ext == "" || validLinkSuffixes[ext]
 }
 
 func getLinksFromDocument(doc *goquery.Document, baseURL string) []string {
 	var links []string
-	validSuffixes := map[string]bool{
-		".html": true,
-		".htm":  true,
-		".txt":  true,
-	}
 
 	doc.Find("a[href]").Each(func(_ int, item *goquery.Selection) {
 		href, exists := item.Attr("href")
@@ -115,24 +136,39 @@ func getLinksFromDocument(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 		absoluteLink := joinURL(baseURL, href)
+		if absoluteLink == "" {
+			return
+		}
+
+		cleanLink, err := sanitizeURL(absoluteLink)
+		if err != nil {
+			return
+		}
 
 		// only allow approved extensions or none at all
-		ext := strings.ToLower(path.Ext(absoluteLink))
-		if ext == "" || validSuffixes[ext] {
-			links = append(links, absoluteLink)
+		if !isAllowedLink(cleanLink) {
+			return
 		}
+		links = append(links, cleanLink)
 	})
 	return links
 }
 
 func getTextFromDocument(doc *goquery.Document) string {
-	doc.Find("script, style").Each(func(index int, item *goquery.Selection) {
+	doc.Find("script, style").Each(func(_ int, item *goquery.Selection) {
 		item.Remove()
 	})
 	return doc.Text()
 }
 
-func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, agent string, urlCountChan chan<- int, textsChan chan<- string, visited map[string]bool, urlMatchStr string) {
+func crawlAndScrape(u string, depth, delay int, timeout time.Duration, agent string, fetchedChan, matchedChan chan<- int, textsChan chan<- string, visited map[string]bool, urlMatchStr, textMatchStr string) {
+	cleanURL, err := sanitizeURL(u)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing URL %s: %v\n", u, err)
+		return
+	}
+	u = cleanURL
+
 	if visited[u] {
 		return
 	}
@@ -147,10 +183,15 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, agent
 		return
 	}
 
-	// only count & scrape text if it contains -url-match
+	fetchedChan <- 1 // count every successful page fetch
+
+	// only scrape text if -url-match and -text-match pass (links still crawled either way)
 	if urlMatchStr == "" || strings.Contains(strings.ToLower(u), urlMatchStr) {
-		urlCountChan <- 1                     // URL processed
-		textsChan <- getTextFromDocument(doc) // send the text for later n-gram processing
+		text := getTextFromDocument(doc)
+		if textMatchStr == "" || strings.Contains(strings.ToLower(text), textMatchStr) {
+			matchedChan <- 1  // page included in wordlist
+			textsChan <- text // send the text for later n-gram processing
+		}
 	}
 
 	if depth > 1 {
@@ -176,7 +217,7 @@ func crawlAndScrape(u string, depth int, delay int, timeout time.Duration, agent
 				continue
 			}
 
-			crawlAndScrape(link, depth-1, delay, timeout, agent, urlCountChan, textsChan, visited, urlMatchStr)
+			crawlAndScrape(link, depth-1, delay, timeout, agent, fetchedChan, matchedChan, textsChan, visited, urlMatchStr, textMatchStr)
 		}
 	}
 }
@@ -202,19 +243,129 @@ func joinURL(baseURL, relativeURL string) string {
 	return newURL.String()
 }
 
+// live crawl status on stderr (scan/match only when -text-match is set)
+func printCrawlProgress(fetched, matched int, textMatchMode, final bool) {
+	if textMatchMode {
+		if final {
+			fmt.Fprintf(os.Stderr, "\rScan/match:\t%d/%d\n", fetched, matched)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "\rScan/match:\t%d/%d", fetched, matched)
+		return
+	}
+	if final {
+		fmt.Fprintf(os.Stderr, "\rURLs scanned:\t%d\n", fetched)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\rURLs scanned:\t%d", fetched)
+}
+
 func updateProgressBar(action string, total, processed int) {
 	if total == 0 {
 		return // avoid division by zero
 	}
 	percentage := float64(processed) / float64(total) * 100
-	fmt.Printf("\r%s...\t[", action)
+	fmt.Fprintf(os.Stderr, "\r%s...\t[", action)
 	for i := 0; i < int(percentage/5); i++ {
-		fmt.Print("=")
+		fmt.Fprint(os.Stderr, "=")
 	}
 	for i := int(percentage / 5); i < 20; i++ {
-		fmt.Print(" ")
+		fmt.Fprint(os.Stderr, " ")
 	}
-	fmt.Printf("] %.2f%%", percentage)
+	fmt.Fprintf(os.Stderr, "] %.2f%%", percentage)
+}
+
+// track bytes read from file for progress bar updates
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func markUniqueWords(words []string, uniqueWords map[string]bool) {
+	for _, word := range words {
+		uniqueWords[word] = true // count unique words
+	}
+}
+
+// build n-grams from a word slice (url mode and in-memory text)
+func countNgramsFromWords(words []string, ngramMin, ngramMax int, ngramCounts map[string]int) {
+	for i := 0; i <= len(words)-ngramMin; i++ {
+		for n := ngramMin; n <= ngramMax && i+n <= len(words); n++ {
+			ngramCounts[strings.Join(words[i:i+n], " ")]++ // count n-gram frequency
+		}
+	}
+}
+
+// process scraped page text into unique words and n-gram counts
+func processTextBlob(text string, ngramMin, ngramMax int, uniqueWords map[string]bool, ngramCounts map[string]int, trackUnique bool) {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return
+	}
+	if trackUnique {
+		markUniqueWords(words, uniqueWords)
+	}
+	if ngramMax == 1 {
+		for _, word := range words {
+			ngramCounts[word]++ // count word frequency
+		}
+		return
+	}
+	countNgramsFromWords(words, ngramMin, ngramMax, ngramCounts)
+}
+
+// stream file from disk instead of loading entire file into ram
+func countNgramsFromStream(r io.Reader, fileSize int64, ngramMin, ngramMax int, uniqueWords map[string]bool, ngramCounts map[string]int, trackUnique bool, progress func(processed, total int)) error {
+	cr := &countingReader{r: r}
+	scanner := bufio.NewScanner(cr)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Split(bufio.ScanWords)
+
+	total := int(fileSize)
+	if total == 0 {
+		total = 1
+	}
+
+	if ngramMax == 1 {
+		for scanner.Scan() {
+			word := scanner.Text()
+			if trackUnique {
+				uniqueWords[word] = true
+			}
+			ngramCounts[word]++ // count word frequency
+			if progress != nil {
+				progress(int(cr.n), total)
+			}
+		}
+		return scanner.Err()
+	}
+
+	// sliding window for multi-word n-grams while streaming
+	window := make([]string, 0, ngramMax)
+	for scanner.Scan() {
+		word := scanner.Text()
+		if trackUnique {
+			uniqueWords[word] = true
+		}
+		window = append(window, word)
+		for n := ngramMin; n <= ngramMax && n <= len(window); n++ {
+			start := len(window) - n
+			ngramCounts[strings.Join(window[start:], " ")]++ // count n-gram frequency
+		}
+		if len(window) > ngramMax {
+			window = window[1:]
+		}
+		if progress != nil {
+			progress(int(cr.n), total)
+		}
+	}
+	return scanner.Err()
 }
 
 func monitorRAMUsage(stopChan chan bool, maxRAMUsage *float64) {
@@ -236,10 +387,68 @@ func monitorRAMUsage(stopChan chan bool, maxRAMUsage *float64) {
 	}
 }
 
+// write unique n-grams to output file
+func writeNgrams(outPath string, ngramCounts map[string]int, sortByFreq bool) error {
+	outFile, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	writer := bufio.NewWriterSize(outFile, 1*1024*1024) // 1MB buffer
+	totalNgrams := len(ngramCounts)
+	interval := totalNgrams / 100
+	if interval == 0 {
+		interval = 1
+	}
+
+	if sortByFreq {
+		fmt.Fprintln(os.Stderr, "Sorting wordlist by frequency...")
+		type pair struct {
+			Text  string
+			Count int
+		}
+		pairs := make([]pair, 0, len(ngramCounts)) // preallocate sort slice
+		for txt, cnt := range ngramCounts {
+			pairs = append(pairs, pair{txt, cnt})
+		}
+		sort.Slice(pairs, func(i, j int) bool {
+			if pairs[i].Count != pairs[j].Count {
+				return pairs[i].Count > pairs[j].Count
+			}
+			return pairs[i].Text < pairs[j].Text
+		})
+		for i, p := range pairs {
+			if _, err := writer.WriteString(p.Text + "\n"); err != nil {
+				return err
+			}
+			if i%interval == 0 {
+				updateProgressBar("Writing", len(pairs), i+1)
+			}
+		}
+	} else {
+		// original unsorted output
+		i := 0
+		for gram := range ngramCounts {
+			if _, err := writer.WriteString(gram + "\n"); err != nil {
+				return err
+			}
+			if i%interval == 0 {
+				updateProgressBar("Writing", totalNgrams, i+1)
+			}
+			i++
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	updateProgressBar("Writing", totalNgrams, totalNgrams)
+	return nil
+}
+
 // main function
 func main() {
-	//clearScreen()
-
 	cycloneFlag := flag.Bool("cyclone", false, "Display coded message")
 	versionFlag := flag.Bool("version", false, "Display version")
 	urlFlag := flag.String("url", "", "URL of the website to scrape")
@@ -248,10 +457,11 @@ func main() {
 	oFlag := flag.String("o", "", "Output file for the n-grams")
 	crawlFlag := flag.Int("crawl", 1, "Depth of links to crawl")
 	delayFlag := flag.Int("delay", 10, "Delay in ms between each URL lookup to avoid rate limiting")
-	timeoutFlag := flag.Int("timeout", 1, "Timeout for URL crawling in seconds")
+	timeoutFlag := flag.Int("timeout", 10, "Timeout for URL crawling in seconds")
 	sortFlag := flag.Bool("sort", false, "Sort output by frequency")
 	urlMatchFlag := flag.String("url-match", "", "Only crawl URLs containing this keyword (case-insensitive)")
-	agentFlag := flag.String("agent", "Spider/0.9.1 (+https://github.com/cyclone-github/spider)", "Custom user-agent")
+	textMatchFlag := flag.String("text-match", "", "Only process page text containing this keyword (case-insensitive); all URLs are still crawled")
+	agentFlag := flag.String("agent", "Mozilla/5.0 (X11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Spider/"+spiderVersion+"", "Custom user-agent")
 
 	flag.Parse()
 
@@ -262,8 +472,7 @@ func main() {
 		os.Exit(0)
 	}
 	if *versionFlag {
-		version := "Cyclone's URL Spider v0.9.1"
-		fmt.Fprintln(os.Stderr, version)
+		fmt.Fprintf(os.Stderr, "Cyclone's Spider v%s\n", spiderVersion)
 		os.Exit(0)
 	}
 
@@ -276,6 +485,12 @@ func main() {
 	fileMode := *fileFlag != ""
 
 	urlMatchStr := strings.ToLower(*urlMatchFlag)
+	textMatchStr := strings.ToLower(*textMatchFlag)
+
+	if fileMode && textMatchStr != "" {
+		fmt.Fprintln(os.Stderr, "Error: -text-match is only supported with -url")
+		os.Exit(1)
+	}
 
 	var baseDomain string
 	if !fileMode {
@@ -288,6 +503,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error: -delay flag must be between 0 and 60000")
 			os.Exit(1)
 		}
+		if *timeoutFlag < 1 || *timeoutFlag > 600 {
+			fmt.Fprintln(os.Stderr, "Error: -timeout flag must be between 1 and 600")
+			os.Exit(1)
+		}
 
 		// check for "http*" on urlFlag so goquery doesn't wet the bed
 		u, err := url.Parse(*urlFlag)
@@ -297,8 +516,13 @@ func main() {
 		}
 		if u.Scheme == "" {
 			u.Scheme = "https"
-			*urlFlag = u.String()
 		}
+		cleanURL, err := sanitizeURL(u.String())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing URL: %v\n", err)
+			os.Exit(1)
+		}
+		*urlFlag = cleanURL
 
 		baseDomain, err = getBaseDomain(*urlFlag)
 		if err != nil {
@@ -330,18 +554,17 @@ func main() {
 			name := strings.TrimSuffix(base, filepath.Ext(base))
 			*oFlag = name + "_spider.txt"
 		} else {
-			parsedUrl, _ := url.Parse(*urlFlag)
-			*oFlag = strings.TrimPrefix(parsedUrl.Hostname(), "www.") + "_spider.txt"
+			parsedURL, _ := url.Parse(*urlFlag)
+			*oFlag = strings.TrimPrefix(parsedURL.Hostname(), "www.") + "_spider.txt"
 		}
 	}
 
 	timeoutDur := time.Duration(*timeoutFlag) * time.Second
-
 	start := time.Now()
 
-	fmt.Fprintln(os.Stderr, " ---------------------- ")
-	fmt.Fprintln(os.Stderr, "| Cyclone's URL Spider |")
-	fmt.Fprintln(os.Stderr, " ---------------------- ")
+	fmt.Fprintln(os.Stderr, " ------------------ ")
+	fmt.Fprintln(os.Stderr, "| Cyclone's Spider |")
+	fmt.Fprintln(os.Stderr, " ------------------ ")
 	fmt.Fprintln(os.Stderr)
 	if fileMode {
 		fmt.Fprintf(os.Stderr, "Reading file:\t%s\n", *fileFlag)
@@ -353,191 +576,170 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ngram len:\t%s\n", *ngramFlag)
 		fmt.Fprintf(os.Stderr, "Crawl delay:\t%dms (increase to avoid rate limiting)\n", *delayFlag)
 		fmt.Fprintf(os.Stderr, "Timeout:\t%d sec\n", *timeoutFlag)
+		if urlMatchStr != "" {
+			fmt.Fprintf(os.Stderr, "URL match:\t%s\n", *urlMatchFlag)
+		}
+		if textMatchStr != "" {
+			fmt.Fprintf(os.Stderr, "Text match:\t%s\n", *textMatchFlag)
+		}
 	}
 
-	// initialize channels and sync group
-	urlCountChan := make(chan int)
-	textsChan := make(chan string, 1*1024*1024) // buffered channel for text
-	visitedURLs := make(map[string]bool)
-	doneChan := make(chan struct{})
-	var wg sync.WaitGroup
+	// start RAM usage monitor
 	stopMonitor := make(chan bool)
 	var maxRAMUsage float64
-
-	// start RAM usage monitor
 	go monitorRAMUsage(stopMonitor, &maxRAMUsage)
 
-	// mode-specific input
+	// skip redundant uniqueWordsMap when ngram=1 (use len(ngramCounts) instead)
+	trackUnique := !(ngramMin == 1 && ngramMax == 1)
+	ngramCounts := make(map[string]int)
+	var uniqueWordsMap map[string]bool
+	if trackUnique {
+		uniqueWordsMap = make(map[string]bool)
+	}
+
+	// set up progress bar ticker
+	progressTicker := time.NewTicker(100 * time.Millisecond) // update progress every 100ms
+	defer progressTicker.Stop()
+
+	// mode-specific input and processing
 	if fileMode {
-		// read whole file instead of crawling
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			data, err := os.ReadFile(*fileFlag)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", *fileFlag, err)
-				os.Exit(1)
+		// read file from disk instead of crawling
+		inFile, err := os.Open(*fileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", *fileFlag, err)
+			os.Exit(1)
+		}
+		defer inFile.Close()
+
+		fi, err := inFile.Stat()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", *fileFlag, err)
+			os.Exit(1)
+		}
+
+		lastProgress := 0
+		progressFn := func(processed, total int) {
+			select {
+			case <-progressTicker.C:
+				if processed != lastProgress {
+					updateProgressBar("Processing", total, processed)
+					lastProgress = processed
+				}
+			default:
 			}
-			textsChan <- string(data)
-			close(textsChan)
-		}()
+		}
+
+		if err := countNgramsFromStream(inFile, fi.Size(), ngramMin, ngramMax, uniqueWordsMap, ngramCounts, trackUnique, progressFn); err != nil {
+			fmt.Fprintf(os.Stderr, "Error processing file %s: %v\n", *fileFlag, err)
+			os.Exit(1)
+		}
+		updateProgressBar("Processing", int(fi.Size()), int(fi.Size()))
 	} else {
 		// URL mode: crawl
+		fetchedChan := make(chan int)
+		matchedChan := make(chan int)
+		textsChan := make(chan string, 64) // buffered channel for text
+		doneChan := make(chan struct{})
+		var wg sync.WaitGroup
+
+		textMatchMode := textMatchStr != ""
+
+		// live crawl counter on stderr
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
-			totalCrawled := 0
+			totalFetched := 0
+			totalMatched := 0
 			for {
 				select {
 				case <-ticker.C:
-					fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled)
-				case count := <-urlCountChan:
-					totalCrawled += count
+					printCrawlProgress(totalFetched, totalMatched, textMatchMode, false)
+				case <-fetchedChan:
+					totalFetched++
+				case <-matchedChan:
+					totalMatched++
 				case <-doneChan:
-					if totalCrawled > 0 {
-						fmt.Fprintf(os.Stderr, "\rURLs crawled:\t%d", totalCrawled)
-					}
+					ticker.Stop()
+					printCrawlProgress(totalFetched, totalMatched, textMatchMode, true)
 					return
 				}
 			}
 		}()
 
 		// start crawling process in goroutine
+		visitedURLs := make(map[string]bool)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, *agentFlag, urlCountChan, textsChan, visitedURLs, urlMatchStr)
+			crawlAndScrape(*urlFlag, *crawlFlag, *delayFlag, timeoutDur, *agentFlag, fetchedChan, matchedChan, textsChan, visitedURLs, urlMatchStr, textMatchStr)
 			time.Sleep(100 * time.Millisecond)
 			close(textsChan)
 			close(doneChan)
-			fmt.Println()
 		}()
-	}
 
-	// collect all text into a slice
-	var texts []string
-	for text := range textsChan {
-		texts = append(texts, text)
-	}
-
-	// if nothing matched, exit early
-	if len(texts) == 0 {
-		fmt.Fprintln(os.Stderr, "No URLs crawled, exiting...") // boo, something went wrong!
-		if *crawlFlag == 1 {
-			fmt.Fprintln(os.Stderr, "Try increasing -crawl depth, or remove -url-match")
+		// collect all text into a slice
+		var texts []string
+		for text := range textsChan {
+			texts = append(texts, text)
 		}
-		return
+		wg.Wait()
+
+		// if nothing matched, exit early
+		if len(texts) == 0 {
+			fmt.Fprintln(os.Stderr, "No matching page text found, exiting...") // boo, something went wrong!
+			if *crawlFlag == 1 {
+				fmt.Fprintln(os.Stderr, "Try increasing -crawl depth, or remove -url-match / -text-match")
+			}
+			stopMonitor <- true
+			os.Exit(1)
+		}
+
+		// process scraped page text into n-grams
+		for _, text := range texts {
+			processTextBlob(text, ngramMin, ngramMax, uniqueWordsMap, ngramCounts, trackUnique)
+		}
 	}
 
-	totalTexts := len(texts)
-
-	// set up progress bar ticker
-	progressTicker := time.NewTicker(100 * time.Millisecond) // update progress every 100ms
-	defer progressTicker.Stop()
-	processedTexts := 0
-
-	// maps for unique words and n-gram counts
-	uniqueWordsMap := make(map[string]bool)
-	ngramCounts := make(map[string]int)
-
-	// process texts and generate n-grams
-	for _, text := range texts {
-		words := strings.Fields(text)
-		for _, word := range words {
-			uniqueWordsMap[word] = true // count unique words
-		}
-		for i := 0; i <= len(words)-ngramMin; i++ {
-			for n := ngramMin; n <= ngramMax && i+n <= len(words); n++ {
-				ngram := strings.Join(words[i:i+n], " ")
-				ngramCounts[ngram]++ // count n-gram frequency
+	if len(ngramCounts) == 0 {
+		if fileMode {
+			fmt.Fprintln(os.Stderr, "No words found, exiting...")
+		} else {
+			fmt.Fprintln(os.Stderr, "No matching page text found, exiting...")
+			if *crawlFlag == 1 {
+				fmt.Fprintln(os.Stderr, "Try increasing -crawl depth, or remove -url-match / -text-match")
 			}
 		}
-		processedTexts++
-		select {
-		case <-progressTicker.C:
-			updateProgressBar("Processing", totalTexts, processedTexts)
-		default:
-			// continue without blocking if ticker channel is not ready
-		}
+		stopMonitor <- true
+		os.Exit(1)
 	}
-	// final update to progress bar output
-	updateProgressBar("Processing", totalTexts, processedTexts)
 
 	// stats
-	fmt.Fprintf(os.Stderr, "\nUnique words:\t%d\n", len(uniqueWordsMap))
+	uniqueWordCount := len(ngramCounts)
+	if trackUnique {
+		uniqueWordCount = len(uniqueWordsMap)
+	}
+
+	if fileMode {
+		fmt.Fprintf(os.Stderr, "\nUnique words:\t%d\n", uniqueWordCount)
+	} else {
+		fmt.Fprintf(os.Stderr, "Unique words:\t%d\n", uniqueWordCount)
+	}
 	fmt.Fprintf(os.Stderr, "Unique ngrams:\t%d\n", len(ngramCounts))
 
 	// write unique n-grams to file
-	outFile, err := os.Create(*oFlag)
-	if err != nil {
-		fmt.Println("Error creating file:", err)
-		return
-	}
-	defer outFile.Close()
-	writer := bufio.NewWriterSize(outFile, 1*1024*1024) // 1MB buffer
-	totalNgrams := len(ngramCounts)
-	interval := totalNgrams / 100
-	if interval == 0 {
-		interval = 1
+	if err := writeNgrams(*oFlag, ngramCounts, *sortFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing output file: %v\n", err)
+		stopMonitor <- true
+		os.Exit(1)
 	}
 
-	if *sortFlag {
-		fmt.Fprintln(os.Stderr, "Sorting n-grams by frequency...")
-		type pair struct {
-			Text  string
-			Count int
-		}
-		var pairs []pair
-		for txt, cnt := range ngramCounts {
-			pairs = append(pairs, pair{txt, cnt})
-		}
-		sort.Slice(pairs, func(i, j int) bool {
-			if pairs[i].Count != pairs[j].Count {
-				return pairs[i].Count > pairs[j].Count
-			}
-			return pairs[i].Text < pairs[j].Text
-		})
-		for i, p := range pairs {
-			_, err := writer.WriteString(p.Text + "\n")
-			if err != nil {
-				fmt.Println("Error writing to buffer:", err)
-				return
-			}
-			if i%interval == 0 {
-				updateProgressBar("Writing", len(pairs), i+1)
-			}
-		}
-
-	} else {
-		// original unsorted output
-		i := 0
-		for gram := range ngramCounts {
-			_, err := writer.WriteString(gram + "\n")
-			if err != nil {
-				fmt.Println("Error writing to buffer:", err)
-				return
-			}
-			if i%interval == 0 {
-				updateProgressBar("Writing", totalNgrams, i+1)
-			}
-			i++
-		}
-	}
-
-	if err := writer.Flush(); err != nil {
-		fmt.Println("Error flushing buffer to file:", err)
-		return
-	}
-	updateProgressBar("Writing", totalNgrams, totalNgrams)
-
-	// stop RAM monitoring
 	stopMonitor <- true
 
 	// print statistics
 	fmt.Fprintf(os.Stderr, "\nOutput file:\t%s\n", *oFlag)
-	fmt.Fprintf(os.Stderr, "RAM used:\t%.2f GB\n", maxRAMUsage)
+	fmt.Fprintf(os.Stderr, "RAM used:\t%.3f GB\n", maxRAMUsage)
 	fmt.Fprintf(os.Stderr, "Runtime:\t%.3fs\n", time.Since(start).Seconds())
 }
 
