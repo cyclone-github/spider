@@ -44,8 +44,6 @@ v0.7.1;
     added progress bars to word / ngrams processing & file writing operations
     added RAM usage monitoring
     optimized order of operations for faster processing with less RAM
-	TO-DO: refactor code (func main is getting messy)
-    TO-DO: add -file flag to allow crawling local plaintext files such as an ebook.txt (COMPLETED in v0.8.0)
 v0.8.0;
     added flag "-file" to allow creating ngrams from a local plaintext file (ex: foobar.txt)
     added flag "-timeout" for -url mode
